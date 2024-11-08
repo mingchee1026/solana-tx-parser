@@ -1,5 +1,5 @@
 import { Event, Program, utils } from "@coral-xyz/anchor";
-import { JUPITER_V6_PROGRAM_ID, RAYDIUM_AMM_PROGRAM_ID } from "../constants";
+import { JUPITER_V6_PROGRAM_ID } from "../constants";
 import { TransactionWithMeta } from "../types";
 
 export function getEvents(
@@ -13,7 +13,9 @@ export function getEvents(
 
     meta.innerInstructions?.map(async (ix) => {
       ix.instructions.map(async (iix) => {
+        console.log("11111111111111", typeof iix.programId);
         if (!iix.programId.equals(JUPITER_V6_PROGRAM_ID)) return;
+        // if (iix.programId !== JUPITER_V6_PROGRAM_ID.toBase58()) return;
         if (!("data" in iix)) return; // Guard in case it is a parsed decoded instruction
 
         const ixData = utils.bytes.bs58.decode(iix.data);

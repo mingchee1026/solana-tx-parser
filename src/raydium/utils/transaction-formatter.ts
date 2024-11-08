@@ -14,6 +14,32 @@ import {
 } from "@solana/web3.js";
 
 export class TransactionFormatter {
+  public formTransactionFromRaw(
+    data: any,
+    time: number
+  ): VersionedTransactionResponse {
+    const rawTx = data["transaction"];
+
+    const slot = data.slot;
+    const version = rawTx.transaction.version ? 0 : "legacy";
+
+    const meta = this.formMeta(rawTx.meta);
+    const signatures = rawTx.transaction.signatures.map((s: string) => s);
+
+    const message = this.formTxnMessage(rawTx.transaction.message);
+
+    return {
+      slot,
+      version,
+      blockTime: time,
+      meta,
+      transaction: {
+        signatures,
+        message,
+      },
+    };
+  }
+
   public formTransactionFromJson(
     data: any,
     time: number

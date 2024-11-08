@@ -9,7 +9,7 @@
     "dist"
   ],
   "scripts": {
-    "start": "ts-node src/cli.ts",
+    "start": "ts-node src/index.ts",
     "build": "tsup"
   },
   "author": "",
