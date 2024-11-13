@@ -1,14 +1,23 @@
-import { Connection } from "@solana/web3.js";
+import { Connection, VersionedTransaction } from "@solana/web3.js";
+import {
+  AccountLayout,
+  getAssociatedTokenAddressSync,
+  transferCheckedInstructionData,
+} from "@solana/spl-token";
 import { WebSocket } from "ws";
 import dotenv from "dotenv";
-import { extractJupiterSwap } from "./jupiter";
-import { extractRaydiumSwap } from "./raydium";
+import { extractJupiterTransaction } from "./jupiter";
+import { extractRaydiumTransaction } from "./raydium";
+import {
+  TransactionType,
+  JUPITER_PROGRAM_ID,
+  RAYDIUM_PROGRAM_ID,
+  PUMF_FUN_PROGRAM_ID,
+} from "./utils/constants";
 
 dotenv.config();
 
-const rpc = process.env.RPC_ENDPOINT;
-
-const connection = new Connection(rpc); // Use your own RPC endpoint here.
+const connection = new Connection(process.env.RPC_ENDPOINT); // Use your own RPC endpoint here.
 
 function sendRequest(ws: WebSocket, address: string[]) {
   const request = {
@@ -49,41 +58,50 @@ export const subscribeTransaction = async (address: string[]) => {
   });
 
   ws.on("message", async function incoming(data) {
+    // console.log("New txn received ...");
+    const message = data.toString();
     try {
-      const messageStr = data.toString("utf8");
-      const message = JSON.parse(messageStr);
-      if (message.method === "transactionNotification") {
-        const { slot, signature } = message.params.result;
+      const { method, params } = JSON.parse(message);
 
-        if (!signature) {
-          return;
+      if (params && method === "transactionNotification") {
+        // console.log(JSON.stringify(params.result, null, 4));
+
+        const { signature, transaction, slot } = params.result;
+
+        let txnResult;
+        const amm = getTradeAMM(transaction.meta.logMessages);
+
+        // console.log({ amm });
+
+        switch (amm) {
+          case TransactionType.Jupiter:
+            txnResult = await extractJupiterTransaction(
+              signature,
+              connection,
+              transaction,
+              new Date().getTime()
+            );
+            break;
+          case TransactionType.Raydium:
+            txnResult = await extractRaydiumTransaction(
+              signature,
+              connection,
+              transaction,
+              new Date().getTime()
+            );
+            break;
+          case TransactionType.PumfFun:
+            break;
+          default:
+            break;
         }
 
-        const txn = await getTxn(signature);
-
-        console.log(txn);
-
-        if (!txn) {
-          return;
+        if (txnResult) {
+          // console.table(txnResult);
+          console.log(JSON.stringify(txnResult, null, 4));
+        } else {
+          console.log("Unknown transaction");
         }
-
-        let result = extractJupiterSwap(
-          signature,
-          connection,
-          txn,
-          txn.blockTime
-        );
-
-        if (!result) {
-          result = extractRaydiumSwap(
-            signature,
-            connection,
-            txn,
-            txn.blockTime
-          );
-        }
-
-        console.log(result);
       }
     } catch (e) {
       console.error(e);
@@ -108,4 +126,34 @@ export const subscribeTransaction = async (address: string[]) => {
 
     return txn;
   }
+
+  const getTradeAMM = (logMessages: string[]) => {
+    const foundTypes: TransactionType[] = [];
+
+    const dex = logMessages.some((message, index) => {
+      if (
+        index > 0 &&
+        logMessages[index - 1].includes(`Program ${JUPITER_PROGRAM_ID} invoke`)
+      ) {
+        foundTypes.push(TransactionType.Jupiter);
+        return;
+      } else if (
+        index > 0 &&
+        logMessages[index - 1].includes(`Program ${RAYDIUM_PROGRAM_ID} invoke`)
+      ) {
+        foundTypes.push(TransactionType.Raydium);
+        return;
+      }
+      if (
+        index > 0 &&
+        logMessages[index - 1].includes(`Program ${PUMF_FUN_PROGRAM_ID} invoke`)
+      ) {
+        foundTypes.push(TransactionType.PumfFun);
+        return;
+      }
+    });
+
+    // Return the first found type or Unknown if none found
+    return foundTypes.length > 0 ? foundTypes[0] : TransactionType.Unknown;
+  };
 };

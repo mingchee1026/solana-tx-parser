@@ -66,10 +66,10 @@ const reduceEventData = <T>(events: Event[], name: string) =>
     return acc;
   }, new Array<T>());
 
-export async function extractJupiterSwap(
+export async function extractJupiterTransaction(
   signature: string,
   connection: Connection,
-  tx: TransactionWithMeta,
+  tx: any, //TransactionWithMeta,
   blockTime?: number
 ) {
   const programId = JUPITER_V6_PROGRAM_ID;
@@ -80,15 +80,12 @@ export async function extractJupiterSwap(
     throw new Error("Missing log messages...");
   }
 
-  // const parser = new InstructionParser(programId);
-
   let events = getEvents(program, tx);
 
   const swapEvents = reduceEventData<SwapEvent>(events, "SwapEvent");
   const feeEvent = reduceEventData<FeeEvent>(events, "FeeEvent")[0];
 
   if (swapEvents.length === 0) {
-    // Not a swap event, for example: https://solscan.io/tx/5ZSozCHmAFmANaqyjRj614zxQY8HDXKyfAs2aAVjZaadS4DbDwVq8cTbxmM5m5VzDcfhysTSqZgKGV1j2A2Hqz1V
     return;
   }
 
@@ -110,15 +107,14 @@ export async function extractJupiterSwap(
 
   const swapData = await parseSwapEvents(accountInfosMap, swapEvents);
 
-  const wallet = tx.transaction.message.accountKeys[0].pubkey.toBase58();
-  console.log({
-    signer: wallet,
-    swapData,
-  });
+  const wallet = tx.transaction.message.accountKeys[0].pubkey;
 
-  const result = await checkTraderBuyOrSell(tx, wallet);
+  // console.log({
+  //   signer: wallet,
+  //   swapData,
+  // });
 
-  return result;
+  console.log(feeEvent);
 
   const parser = new InstructionParser(programId);
 
@@ -170,7 +166,7 @@ export async function extractJupiterSwap(
   swap.transferAuthority = transferAuthority;
   swap.lastAccount = lastAccount;
   swap.instruction = instructionName;
-  swap.owner = tx.transaction.message.accountKeys[0].pubkey.toBase58();
+  swap.owner = tx.transaction.message.accountKeys[0].pubkey;
   swap.programId = programId.toBase58();
   swap.signature = signature;
   swap.timestamp = new Date(new Date((blockTime ?? 0) * 1000).toISOString());
@@ -236,7 +232,21 @@ export async function extractJupiterSwap(
     swap.feeMint = mint;
   }
 
-  return swap;
+  // return swap;
+
+  const { ca, signer } = getMintToken(tx);
+  const swapInfo = await checkTraderBuyOrSell(tx, ca, signer);
+
+  // const solTransfer = parser.parseTokenChange(tx, WSOL, signer);
+  // const usdcTransfer = parser.parseTokenChange(tx, USDC, signer);
+  // const usdtTransfer = parser.parseTokenChange(tx, USDT, signer);
+
+  const tokenBalanceChanged = parser.parseTokenBalanceChanged(tx, signer);
+
+  return {
+    swapInfo,
+    balanceInfo: tokenBalanceChanged,
+  };
 }
 
 async function parseSwapEvents(
@@ -337,7 +347,11 @@ function extractMintDecimals(accountInfosMap: AccountInfoMap, mint: PublicKey) {
   return;
 }
 
-async function checkTraderBuyOrSell(data: any, traderAddress: string) {
+async function checkTraderBuyOrSell(
+  data: any,
+  tokenAddress: string,
+  traderAddress: string
+) {
   const preTokenBalances = data.meta.preTokenBalances; // data.transaction.transaction.meta.preTokenBalances;
   const postTokenBalances = data.meta.postTokenBalances; // data.transaction.transaction.meta.postTokenBalances;
   let targetToken = "",
@@ -390,35 +404,27 @@ async function checkTraderBuyOrSell(data: any, traderAddress: string) {
 
   const date = new Date((data.blockTime ?? 0) * 1000).toISOString();
 
-  if (side === "buy") {
-    // console.info(
-    //   `Trader ${traderAddress} is ${side}ing ${swappedTokenAmount} of ${targetToken} using ${swappedSOLAmount} SOL in price of ${
-    //     postPoolSOL / postPoolToken
-    //   }`
-    // );
+  return {
+    AMM: "Jupiter",
+    MINT: tokenAddress,
+    TYPE: side.toUpperCase(),
+    TOKEN: swappedTokenAmount,
+    SOL: swappedSOLAmount,
+    PRICE: postPoolSOL / postPoolToken,
+    MAKER: traderAddress,
+    DATE: date,
+  };
+}
 
-    console.table({
-      DATE: date,
-      TYPE: side.toUpperCase(),
-      TOKEN: swappedTokenAmount,
-      SOL: swappedSOLAmount,
-      PRICE: postPoolSOL / postPoolToken,
-      MAKER: traderAddress,
-    });
-  } else {
-    // console.info(
-    //   `Trader ${traderAddress} is ${side}ing ${swappedTokenAmount} of ${targetToken} for ${swappedSOLAmount} SOL in price of ${
-    //     postPoolSOL / postPoolToken
-    //   }`
-    // );
-
-    return {
-      DATE: date,
-      TYPE: side.toUpperCase(),
-      TOKEN: swappedTokenAmount,
-      SOL: swappedSOLAmount,
-      PRICE: postPoolSOL / postPoolToken,
-      MAKER: traderAddress,
-    };
-  }
+function getMintToken(tx) {
+  const data: any[] = tx.meta.preTokenBalances;
+  const filter = data.filter(
+    (t) => t.mint !== "So11111111111111111111111111111111111111112"
+  );
+  const ca = filter[0].mint;
+  const signer = filter[0].owner;
+  return {
+    ca,
+    signer,
+  };
 }

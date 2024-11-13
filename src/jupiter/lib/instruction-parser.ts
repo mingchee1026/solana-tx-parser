@@ -1,8 +1,13 @@
-import { ParsedInstruction, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { BorshCoder, Program } from "@coral-xyz/anchor";
 import * as base58 from "bs58";
 import { IDL } from "../idl/jupiter";
-import { PartialInstruction, RoutePlan, TransactionWithMeta } from "../types";
+import {
+  ParsedInstruction,
+  PartialInstruction,
+  RoutePlan,
+  TransactionWithMeta,
+} from "../types";
 
 export class InstructionParser {
   private coder: BorshCoder;
@@ -17,7 +22,7 @@ export class InstructionParser {
     instructions: PartialInstruction[]
   ) {
     for (const instruction of instructions) {
-      if (!instruction.programId.equals(this.programId)) {
+      if (instruction.programId !== this.programId.toBase58()) {
         continue;
       }
 
@@ -53,17 +58,17 @@ export class InstructionParser {
   }
 
   // For CPI, we have to also check for innerInstructions.
-  getInstructions(tx: TransactionWithMeta): PartialInstruction[] {
+  getInstructions(tx: any): PartialInstruction[] {
     const parsedInstructions: PartialInstruction[] = [];
     for (const instruction of tx.transaction.message.instructions) {
-      if (instruction.programId.equals(this.programId)) {
+      if (instruction.programId === this.programId.toBase58()) {
         parsedInstructions.push(instruction as any);
       }
     }
 
     for (const instructions of tx.meta.innerInstructions) {
       for (const instruction of instructions.instructions) {
-        if (instruction.programId.equals(this.programId)) {
+        if (instruction.programId === this.programId.toBase58()) {
           parsedInstructions.push(instruction as any);
         }
       }
@@ -75,17 +80,19 @@ export class InstructionParser {
   // Extract the position of the initial and final swap from the swap array.
   getInitialAndFinalSwapPositions(instructions: PartialInstruction[]) {
     for (const instruction of instructions) {
-      if (!instruction.programId.equals(this.programId)) {
+      if (instruction.programId !== this.programId.toBase58()) {
         continue;
       }
 
-      const ix = this.coder.instruction.decode(instruction.data, "base58");
-      // try {
-      //   ix = this.coder.instruction.decode(instruction.data, "base58");
-      //   console.log(ix);
-      // } catch (error) {
-      //   // console.log("ERROR: getInitialAndFinalSwapPositions => ", error);
-      // }
+      let ix = null;
+      try {
+        ix = this.coder.instruction.decode(instruction.data, "base58");
+      } catch (error) {
+        // console.log(
+        //   "ERROR: getInitialAndFinalSwapPositions => ",
+        //   error.message
+        // );
+      }
 
       // This will happen because now event is also an CPI instruction.
       if (!ix) {
@@ -129,7 +136,7 @@ export class InstructionParser {
 
   getExactOutAmount(instructions: (ParsedInstruction | PartialInstruction)[]) {
     for (const instruction of instructions) {
-      if (!instruction.programId.equals(this.programId)) {
+      if (instruction.programId !== this.programId.toBase58()) {
         continue;
       }
       if (!("data" in instruction)) continue; // Guard in case it is a parsed decoded instruction, should be impossible
@@ -146,7 +153,7 @@ export class InstructionParser {
 
   getExactInAmount(instructions: (ParsedInstruction | PartialInstruction)[]) {
     for (const instruction of instructions) {
-      if (!instruction.programId.equals(this.programId)) {
+      if (instruction.programId !== this.programId.toBase58()) {
         continue;
       }
       if (!("data" in instruction)) continue; // Guard in case it is a parsed decoded instruction, should be impossible
@@ -209,5 +216,88 @@ export class InstructionParser {
 
       currentIndex = indexMap.get(currentIndex);
     }
+  }
+
+  parseSolChange(transactionResponse: any) {
+    const preSolBalance = transactionResponse.meta?.preBalances?.[0];
+    const postSolBalance = transactionResponse.meta?.postBalances?.[0];
+
+    if (preSolBalance !== undefined && postSolBalance !== undefined) {
+      const solBalanceChange = postSolBalance - preSolBalance;
+      console.log(`Sol change: ${solBalanceChange}`);
+      return { postSolBalance, solBalanceChange };
+    }
+
+    console.error(
+      "Failed to get sol balance change for transaction id: ",
+      transactionResponse.transaction.signatures[0]
+    );
+    return undefined;
+  }
+
+  parseTokenChange(transactionResponse: any, tokenMint: string, owner: string) {
+    const preTokenBalancesArray = transactionResponse.meta?.preTokenBalances;
+    const postTokenBalancesArray = transactionResponse.meta?.postTokenBalances;
+    const tokenBalancesArray = [];
+    if (
+      postTokenBalancesArray !== null &&
+      postTokenBalancesArray !== undefined
+    ) {
+      let index = 0;
+      for (const postTokenBalance of postTokenBalancesArray) {
+        const preTokenBalance = preTokenBalancesArray[index];
+        if (postTokenBalance.mint === tokenMint) {
+          // && tokenBalance.owner === owner) {
+          const changedTokenAmount =
+            postTokenBalance.uiTokenAmount.uiAmount -
+            preTokenBalance.uiTokenAmount.uiAmount;
+          if (changedTokenAmount !== 0)
+            tokenBalancesArray.push({
+              owner: postTokenBalance.owner,
+              balance: changedTokenAmount,
+              decimals: postTokenBalance.decimals,
+            });
+        }
+        index++;
+      }
+    }
+    return tokenBalancesArray;
+  }
+
+  parseTokenBalanceChanged(transactionResponse: any, owner: string) {
+    const accountKeys = transactionResponse.transaction.message.accountKeys;
+    const preTokenBalancesArray = transactionResponse.meta?.preTokenBalances;
+    const postTokenBalancesArray = transactionResponse.meta?.postTokenBalances;
+    const tokenBalancesArray = [];
+    if (
+      postTokenBalancesArray !== null &&
+      postTokenBalancesArray !== undefined
+    ) {
+      let index = 0;
+      for (const postTokenBalance of postTokenBalancesArray) {
+        const accountIndex = postTokenBalance.accountIndex;
+        const preTokenBalance = preTokenBalancesArray[index];
+        if (!preTokenBalance) {
+          continue;
+        }
+        // if (postTokenBalance.mint === tokenMint) {
+        // && tokenBalance.owner === owner) {
+        const changedTokenAmount =
+          postTokenBalance.uiTokenAmount.uiAmount -
+          preTokenBalance.uiTokenAmount.uiAmount;
+        if (changedTokenAmount !== 0)
+          tokenBalancesArray.push({
+            address: accountKeys[accountIndex - 1].pubkey,
+            owner: postTokenBalance.owner,
+            balanceBefore: preTokenBalance.uiTokenAmount.uiAmount,
+            balanceAfter: postTokenBalance.uiTokenAmount.uiAmount,
+            change: changedTokenAmount,
+            token: postTokenBalance.mint,
+          });
+        // }
+        index++;
+      }
+    }
+    return tokenBalancesArray;
   }
 }
