@@ -15,15 +15,14 @@ import { RaydiumAmmParser } from "./utils/raydium-amm-parser";
 const TXN_FORMATTER = new TransactionFormatter();
 const RAYDIUM_PARSER = new RaydiumAmmParser();
 const RAYDIUM_PUBLIC_KEY = RaydiumAmmParser.PROGRAM_ID;
-const PUMP_FUN_PROGRAM_ID = new PublicKey(
-  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-);
 
 // it represent the person who extract/put the sol/token to the pool for every raydium swap txn
 export const RAYDIUM_AUTHORITY = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1";
 export const WSOL = "So11111111111111111111111111111111111111112";
+export const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
-export async function extractRaydiumSwap(
+export async function extractRaydiumTransaction(
   signature: string,
   connection: Connection,
   tx: any,
@@ -32,31 +31,41 @@ export async function extractRaydiumSwap(
   decodeRaydiumTxn(tx);
 
   const { ca, signer } = getMintToken(tx);
-  const result = await checkTraderBuyOrSell(tx, signer);
+  const swapInfo = await checkTraderBuyOrSell(tx, ca, signer);
 
-  return result;
+  // const solTransfer = RAYDIUM_PARSER.parseTokenChange(tx, WSOL, signer);
+  // const usdcTransfer = RAYDIUM_PARSER.parseTokenChange(tx, USDC, signer);
+  // const usdtTransfer = RAYDIUM_PARSER.parseTokenChange(tx, USDT, signer);
+
+  const tokenBalanceChanged = RAYDIUM_PARSER.parseTokenBalanceChanged(
+    tx,
+    signer
+  );
+
+  return {
+    swapInfo,
+    balanceInfo: tokenBalanceChanged,
+  };
 }
 
-// subscribeCommand(client, req);
-
-function decodeRaydiumTxn(tx: ParsedTransactionWithMeta) {
+function decodeRaydiumTxn(tx: any) {
   if (tx.meta?.err) return;
 
   const events = getEvents(tx);
 
-  console.log(events);
+  // console.log(events);
 
   return events;
 }
 
-function getEvents(transactionResponse: ParsedTransactionWithMeta) {
+function getEvents(transactionResponse: any) {
   let events = [];
 
   if (transactionResponse.transaction.message) {
     let { message } = transactionResponse.transaction;
 
     message.instructions?.map(async (ix) => {
-      if (!ix.programId.equals(RAYDIUM_PUBLIC_KEY)) return;
+      if (ix.programId !== RAYDIUM_PUBLIC_KEY.toBase58()) return;
       if (!("data" in ix)) return; // Guard in case it is a parsed decoded instruction
 
       const instructionData = Buffer.from(base58.default.decode(ix.data));
@@ -66,13 +75,13 @@ function getEvents(transactionResponse: ParsedTransactionWithMeta) {
       if (instructionType === 9) {
         event = RAYDIUM_PARSER.parseRaydiumSwapIn1(
           instructionData,
-          ix.programId
+          new PublicKey(ix.programId)
         );
       }
       if (instructionType === 11) {
         event = RAYDIUM_PARSER.parseRaydiumSwapOut1(
           instructionData,
-          ix.programId
+          new PublicKey(ix.programId)
         );
       }
 
@@ -83,7 +92,11 @@ function getEvents(transactionResponse: ParsedTransactionWithMeta) {
   return events;
 }
 
-async function checkTraderBuyOrSell(data: any, traderAddress: string) {
+async function checkTraderBuyOrSell(
+  data: any,
+  tokenAddress: string,
+  traderAddress: string
+) {
   const preTokenBalances = data.meta.preTokenBalances; // data.transaction.transaction.meta.preTokenBalances;
   const postTokenBalances = data.meta.postTokenBalances; // data.transaction.transaction.meta.postTokenBalances;
   let targetToken = "",
@@ -136,37 +149,16 @@ async function checkTraderBuyOrSell(data: any, traderAddress: string) {
 
   const date = new Date((data.blockTime ?? 0) * 1000).toISOString();
 
-  if (side === "buy") {
-    // console.info(
-    //   `Trader ${traderAddress} is ${side}ing ${swappedTokenAmount} of ${targetToken} using ${swappedSOLAmount} SOL in price of ${
-    //     postPoolSOL / postPoolToken
-    //   }`
-    // );
-
-    console.table({
-      DATE: date,
-      TYPE: side.toUpperCase(),
-      TOKEN: swappedTokenAmount,
-      SOL: swappedSOLAmount,
-      PRICE: postPoolSOL / postPoolToken,
-      MAKER: traderAddress,
-    });
-  } else {
-    // console.info(
-    //   `Trader ${traderAddress} is ${side}ing ${swappedTokenAmount} of ${targetToken} for ${swappedSOLAmount} SOL in price of ${
-    //     postPoolSOL / postPoolToken
-    //   }`
-    // );
-
-    return {
-      DATE: date,
-      TYPE: side.toUpperCase(),
-      TOKEN: swappedTokenAmount,
-      SOL: swappedSOLAmount,
-      PRICE: postPoolSOL / postPoolToken,
-      MAKER: traderAddress,
-    };
-  }
+  return {
+    AMM: "Raydium",
+    MINT: tokenAddress,
+    TYPE: side.toUpperCase(),
+    TOKEN: swappedTokenAmount,
+    SOL: swappedSOLAmount,
+    PRICE: postPoolSOL / postPoolToken,
+    MAKER: traderAddress,
+    DATE: date,
+  };
 }
 
 function getMintToken(tx) {
