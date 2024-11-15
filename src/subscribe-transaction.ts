@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import dotenv from "dotenv";
 import { extractJupiterTransaction } from "./jupiter";
 import { extractRaydiumTransaction } from "./raydium";
+import { extractPumpFunTransaction } from "./pumpfun";
 import {
   TransactionType,
   JUPITER_PROGRAM_ID,
@@ -91,6 +92,12 @@ export const subscribeTransaction = async (address: string[]) => {
             );
             break;
           case TransactionType.PumfFun:
+            txnResult = await extractPumpFunTransaction(
+              signature,
+              connection,
+              transaction,
+              new Date().getTime()
+            );
             break;
           default:
             break;
